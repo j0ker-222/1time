@@ -17,3 +17,5 @@ npm audit fix
 npm run build  
 mv ./build /var/www/onetime  
   
+systemctl start custom_1time.service  
+systemctl enable custom_1time.service  
