@@ -1,0 +1,13 @@
+[Unit]
+Description=OneTime FrontEnd
+After=network.target
+
+[Service]
+Type=simple
+User=nginx
+WorkingDirectory=/usr/local/bin/go_onetime
+ExecStart=1time
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
