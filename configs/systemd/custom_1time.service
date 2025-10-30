@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=nginx
+User=www-data
 WorkingDirectory=/usr/local/bin/go_onetime
 ExecStart=/usr/local/bin/go_onetime/1time
 Restart=always
