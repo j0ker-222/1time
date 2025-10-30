@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=nginx
 WorkingDirectory=/usr/local/bin/go_onetime
-ExecStart=1time
+ExecStart=/usr/local/bin/go_onetime/1time
 Restart=always
 
 [Install]
