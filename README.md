@@ -1,6 +1,6 @@
 # 1time messaging service  
   
-cd 1time-master  
+cd 1time  
 mv configs/systemd/custom_1time.service /usr/lib/systemd/system/  
 systemctl daemon-reload  
 mv ./configs/nginx/1time.conf /etc/nginx/sites-enabled/1time.conf  
