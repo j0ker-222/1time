@@ -1,29 +1,49 @@
-body, pre {
-    margin: 0;
-    padding: 0;
-    font-family: "Open Sans", sans-serif;
-    font-size: 16px;
-    color: #333;
+body,
+pre {
+  margin: 0;
+  padding: 0;
+  font-family: "Open Sans", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  color: #333;
 }
 
-h1, h2, h3, h4, h5, h6{
-    font-family: "PT Serif", serif;
-}
-h1 {
-    font-size: small;
+h1, h2, h3, h4, h5, h6 {
+  font-family: "PT Serif", Georgia, serif;
 }
 
 hr {
-    display: block;
-    height: 1px;
-    border: 0;
-    border-top: 1px solid #ccc;
-    margin: 1em 0;
-    padding: 0;
+  display: block;
+  height: 1px;
+  border: 0;
+  border-top: 1px solid #ccc;
+  margin: 1em 0;
+  padding: 0;
 }
+
 div.logocentered {
-    width: 72px;
-    display: block;
-    margin-left: auto;
-    margin-right: auto;
+  width: 72px;
+  margin: 20px auto 0;
+  text-align: center;
 }
+
+div.Left,
+div.Center {
+  margin: 10px auto;
+  max-width: 600px;
+}
+
+div.Left { text-align: left; }
+div.Center { text-align: center; }
+
+.secret-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+}
+
+.passwords {
+  font-family: SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.mt-gap { margin-top: 12px; }

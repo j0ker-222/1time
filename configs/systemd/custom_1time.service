@@ -1,13 +1,51 @@
 [Unit]
-Description=OneTime FrontEnd
-After=network.target
+Description=1time one-time message service (API backend)
+Documentation=https://github.com/j0ker-222/1time
+After=network.target redis-server.service
+Wants=redis-server.service
 
 [Service]
 Type=simple
-User=www-data
-WorkingDirectory=/usr/local/bin/go_onetime
 ExecStart=/usr/local/bin/go_onetime/1time
-Restart=always
+EnvironmentFile=/etc/custom_1time/env
+Restart=on-failure
+RestartSec=2s
+
+# Runs as a throw-away user without a home or shell.
+DynamicUser=yes
+UMask=0077
+
+# Sandboxing
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Only loopback: nginx in front, Redis on localhost.
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+LimitNOFILE=4096
+TasksMax=256
 
 [Install]
 WantedBy=multi-user.target
