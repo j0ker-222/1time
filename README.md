@@ -1,8 +1,9 @@
 # 1time: одноразовые зашифрованные сообщения
 
 Сервис передаёт пароли и другие секреты одноразовыми ссылками. Сообщение
-шифруется в браузере, сервер хранит только шифротекст в Redis и удаляет
-его при первом чтении или по истечении срока (1, 3, 7 или 30 дней).
+шифруется в браузере, сервер хранит только шифротекст (в Redis или
+PostgreSQL) и удаляет его при первом чтении или по истечении срока
+(1, 3, 7 или 30 дней).
 
 Форк [shingrus/1time](https://github.com/shingrus/1time), используется на
 onetime.j0ker.site.
@@ -12,8 +13,8 @@ onetime.j0ker.site.
 | Компонент | Технологии | Где работает |
 |---|---|---|
 | Фронтенд | React 19, Vite 8, Bootstrap 5, crypto-js 4.2 | статика в `/var/www/onetime`, отдаёт nginx |
-| Бэкенд | Go 1.26, go-redis v9, go-openssl v4 | `127.0.0.1:8080`, systemd `custom_1time` |
-| Хранилище | Redis 7+ | `127.0.0.1:6379`, только в памяти |
+| Бэкенд | Go 1.26, go-redis v9, pgx v5, go-openssl v4 | `127.0.0.1:8080`, systemd `custom_1time` |
+| Хранилище | Redis 7+ (`STORE=redis`, по умолчанию) или PostgreSQL 13+ (`STORE=postgres`) | Redis: `127.0.0.1:6379`, только в памяти |
 | Входная точка | nginx | 443, TLS, заголовки безопасности, rate limit |
 
 1. Браузер генерирует ключ из 12 символов (`crypto.getRandomValues`),
@@ -73,6 +74,33 @@ rm -rf /var/www/onetime && cp -r frontend/build /var/www/onetime
 # nginx (HOSTNAME заменить на имя сайта, сертификат через certbot)
 sed 's/HOSTNAME/onetime.j0ker.site/g' configs/nginx/1time.conf > /etc/nginx/sites-enabled/1time.conf
 nginx -t && systemctl reload nginx
+```
+
+## PostgreSQL и несколько серверов
+
+С `STORE=postgres` сообщения хранятся в PostgreSQL, и несколько копий
+бэкенда работают с одной базой: ссылка, созданная через один сервер,
+открывается через любой другой. Готовая схема с двумя балансировщиками
+на общем vIP (keepalived + nginx), двумя серверами приложения и
+синхронной репликацией PostgreSQL, а также порядок переезда с Redis
+без потери ссылок: [deploy/ha/README.md](deploy/ha/README.md).
+
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `STORE` | `redis` | `redis` или `postgres` |
+| `DATABASE_URL` | | строка подключения, можно несколько хостов и `target_session_attrs=read-write` |
+| `PG_MAX_CONNS` | `10` | размер пула соединений |
+| `DB_MIGRATE` | `true` | создавать таблицу при старте |
+| `CLEANUP_INTERVAL` | `10m` | как часто удалять просроченные сообщения (`0` выключает) |
+
+`1time migrate-redis` копирует сообщения из Redis (`REDISHOST`,
+`REDISPASS`, `REDISDB`) в PostgreSQL (`DATABASE_URL`) с теми же id и
+оставшимся сроком жизни. Повторный запуск безопасен.
+
+Тесты PostgreSQL запускаются, если задан `TEST_PG_DSN`:
+
+```shell
+TEST_PG_DSN='postgres://postgres@127.0.0.1:5432/onetime_test?sslmode=disable' make test-go
 ```
 
 ## Обновление со старой версии

@@ -209,7 +209,7 @@ func (a *API) unsecSave(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.Ping(r.Context()); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "redis unavailable"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "storage unavailable"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
