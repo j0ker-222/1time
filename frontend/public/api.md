@@ -1,51 +1,43 @@
-**Create Link**
-----
-  Creates new one-time link with encrypted message.
+# 1time API
 
-* **URL**
+All calls are `POST` with `Content-Type: application/json` (other content
+types are rejected with 415). Body size is limited to 1 MB, nginx limits the
+rate to 10 requests per second per IP.
 
-  /api/unsecSave
+## Create a link from plain text
 
-* **Method:**
+`POST /api/unsecSave`
 
-  `POST`
+The server encrypts the message, so it sees the plaintext. For full
+client-side encryption use the web interface.
 
-*  **URL Params**
+Request:
 
-  None
+```json
+{ "secretMessage": "text", "duration": 86400 }
+```
 
-* **Data Params**
-  **Content:**
-  `{
-        secretMessage string,
-        duration      int
-   }`
+`duration` is in seconds, default 7 days, maximum 30 days (2592000).
 
-duration  - Seconds to store the secret message. Default is 7 days. Maximum is 30 days(30*86400)
+Response:
 
+```json
+{ "status": "ok", "newLink": "/v/#<12-char key><id>" }
+```
 
+The full link is the site origin plus `newLink`, for example
+`https://onetime.j0ker.site/v/#AbCdEfGhIjKl0123456789abcdef0123456789abcdef`.
 
-* **Success Response:**
+On error `status` is not `"ok"` and `newLink` is empty.
 
-  * **Code:** 200
-    **Content:**
-    `{
-        status: "ok",
-        newLink : "/v/#12345678"
-    }`
-To view this message on the site you should concatenate two strings: "https://1time.it" and value of the newLink parameter. For example: https://1time.it/v/#12345678
+Example:
 
-* **Error Response:**
+```shell
+curl -sS -X POST -H 'Content-Type: application/json' \
+  https://onetime.j0ker.site/api/unsecSave \
+  -d '{"secretMessage":"test message","duration":3600}'
+```
 
-  * **Code:** 200
-    **Content:** `{
-        status: "error",
-        NewLink: ""
-    }`
+## Health check
 
-* **Sample Call:**
-
-  ```shell
-   curl -X POST -H 'content-type: application/json' 'https://1time.it/api/unsecSave' -d \
-   '{"secretMessage":"test Message"}'
-  ```
+`GET /api/health` returns `{"status":"ok"}` (200) or 503 when Redis is down.

@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Weekly re-scan for newly published vulnerabilities.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+        env:
+          TEST_REDIS_ADDR: 127.0.0.1:6379
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/1time .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: 1time-linux-amd64
+          path: bin/1time
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npm test
+      - run: npm run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: frontend-build
+          path: frontend/build
