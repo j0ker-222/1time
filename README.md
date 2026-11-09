@@ -30,7 +30,7 @@ API для скриптов: [frontend/public/api.md](frontend/public/api.md).
 ## Сборка
 
 Нужны Go 1.26 (официальный архив с https://go.dev/dl/, пакет Debian
-старее) и Node.js 20.19+ или 22.
+старее) и Node.js 22.22+ (LTS 22 или 24).
 
 ```shell
 make test        # go vet + go test, vitest
