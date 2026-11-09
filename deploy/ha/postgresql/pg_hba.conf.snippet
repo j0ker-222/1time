@@ -1,0 +1,8 @@
+# Add to /etc/postgresql/<ver>/main/pg_hba.conf on app1 and app2.
+# Application nodes connect to the database, the peer node replicates.
+hostssl onetime     onetime     10.10.0.21/32   scram-sha-256
+hostssl onetime     onetime     10.10.0.22/32   scram-sha-256
+host    onetime     onetime     10.10.0.21/32   scram-sha-256
+host    onetime     onetime     10.10.0.22/32   scram-sha-256
+host    replication replicator  10.10.0.21/32   scram-sha-256
+host    replication replicator  10.10.0.22/32   scram-sha-256

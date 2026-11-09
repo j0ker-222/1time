@@ -20,6 +20,14 @@ jobs:
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: onetime_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -30,6 +38,7 @@ jobs:
       - run: go test -race -count=1 ./...
         env:
           TEST_REDIS_ADDR: 127.0.0.1:6379
+          TEST_PG_DSN: postgres://postgres:postgres@127.0.0.1:5432/onetime_test?sslmode=disable
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/1time .
       - uses: actions/upload-artifact@v7
