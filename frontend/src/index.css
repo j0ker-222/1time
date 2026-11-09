@@ -20,10 +20,12 @@ hr {
   padding: 0;
 }
 
+/* Как в первой версии: логотип вплотную к верху страницы */
 div.logocentered {
   width: 72px;
-  margin: 20px auto 0;
-  text-align: center;
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 div.Left,
