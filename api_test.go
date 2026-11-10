@@ -13,7 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Luzifer/go-openssl/v4"
+	"crypto/sha256"
+	"encoding/hex"
+
+	"1time/internal/otcrypto"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
@@ -36,10 +39,15 @@ func newTestRedis(t *testing.T) *redis.Client {
 	return rdb
 }
 
-func newTestServer(t *testing.T) (*httptest.Server, *redis.Client) {
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func newTestServer(t *testing.T, opts ...APIOption) (*httptest.Server, *redis.Client) {
 	t.Helper()
 	rdb := newTestRedis(t)
-	srv := httptest.NewServer(NewAPI(NewRedisStore(rdb)).Handler())
+	srv := httptest.NewServer(NewAPI(NewRedisStore(rdb), opts...).Handler())
 	t.Cleanup(srv.Close)
 	return srv, rdb
 }
@@ -124,28 +132,110 @@ func TestLegacyMessageStillReadable(t *testing.T) {
 	}
 }
 
-func TestUnsecSaveRoundTrip(t *testing.T) {
+func TestSaveWithClientID(t *testing.T) {
 	srv, _ := newTestServer(t)
+	lk, _ := otcrypto.NewLinkKey()
+	keys, _ := otcrypto.Derive(lk, "")
+	body := map[string]any{"secretMessage": "v3:x", "hashedKey": keys.Token, "id": keys.ID}
+	code, res := post(t, srv.URL+"/api/saveSecret", body)
+	if code != 200 || res["status"] != "ok" || res["newId"] != keys.ID {
+		t.Fatalf("save: %d %v", code, res)
+	}
+	// The same id again must not overwrite the stored message.
+	body["secretMessage"] = "v3:other"
+	code, res = post(t, srv.URL+"/api/saveSecret", body)
+	if code != http.StatusConflict || res["status"] != "id taken" {
+		t.Fatalf("duplicate id: %d %v", code, res)
+	}
+	_, res = post(t, srv.URL+"/api/get", map[string]any{"id": keys.ID, "hashedKey": keys.Token})
+	if res["status"] != "ok" || res["cryptedMessage"] != "v3:x" {
+		t.Fatalf("get: %v", res)
+	}
+	for _, bad := range []string{"1a", strings.Repeat("A", 32), strings.Repeat("a", 64), "../../etc"} {
+		code, _ := post(t, srv.URL+"/api/saveSecret", map[string]any{"secretMessage": "x", "hashedKey": keys.Token, "id": bad})
+		if code != http.StatusBadRequest {
+			t.Fatalf("id %q: got %d", bad, code)
+		}
+	}
+}
+
+func TestUnsecSaveDisabledByDefault(t *testing.T) {
+	srv, _ := newTestServer(t)
+	code, _ := post(t, srv.URL+"/api/unsecSave", map[string]any{"secretMessage": "x"})
+	if code != http.StatusNotFound {
+		t.Fatalf("unsecSave must be off by default, got %d", code)
+	}
+}
+
+func TestUnsecSaveV3RoundTrip(t *testing.T) {
+	srv, rdb := newTestServer(t, WithUnsecSave(true))
 	_, res := post(t, srv.URL+"/api/unsecSave", map[string]any{"secretMessage": "Привет из API"})
 	if res["status"] != "ok" {
 		t.Fatalf("unsecSave: %v", res)
 	}
-	link := strings.TrimPrefix(res["newLink"].(string), "/v/#")
-	key, id := link[:randKeyLen], link[randKeyLen:]
-
-	_, got := post(t, srv.URL+"/api/get", map[string]any{"id": id, "hashedKey": sha256Hex(key)})
+	link := res["newLink"].(string)
+	lk, _, err := otcrypto.ParseFragment(link)
+	if err != nil || len(link) != len("/v/#")+otcrypto.FragmentLen {
+		t.Fatalf("link %q: %v", link, err)
+	}
+	keys, _ := otcrypto.Derive(lk, "")
+	id := keys.ID
+	stored, _ := rdb.Get(context.Background(), storeKey(id)).Result()
+	if strings.Contains(stored, "Привет") || !strings.Contains(stored, `"v3:`) {
+		t.Fatalf("stored value must be a v3 ciphertext: %s", stored)
+	}
+	_, got := post(t, srv.URL+"/api/get", map[string]any{"id": id, "hashedKey": keys.Token})
 	if got["status"] != "ok" {
 		t.Fatalf("get: %v", got)
 	}
-	plain, err := openssl.New().DecryptBytes(key, []byte(got["cryptedMessage"].(string)), openssl.BytesToKeyMD5)
+	plain, err := otcrypto.Decrypt(keys, got["cryptedMessage"].(string))
 	if err != nil || string(plain) != "Привет из API" {
 		t.Fatalf("decrypt: %q %v", plain, err)
 	}
 }
 
+func TestClientSendRead(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	t.Setenv("ONETIME_SECRET", "extra key")
+	var out, errb bytes.Buffer
+	if rc := runClient([]string{"send", "-url", srv.URL, "-days", "1"}, strings.NewReader("секрет из скрипта"), &out, &errb); rc != 0 {
+		t.Fatalf("send rc=%d %s", rc, errb.String())
+	}
+	link := strings.TrimSpace(out.String())
+	if len(link) != len(srv.URL+"/v/#")+otcrypto.FragmentLen {
+		t.Fatalf("link %q", link)
+	}
+	lk, _, _ := otcrypto.ParseFragment(link)
+	k, _ := otcrypto.Derive(lk, "")
+	id := k.ID
+	stored, _ := rdb.Get(context.Background(), storeKey(id)).Result()
+	if strings.Contains(stored, "секрет") {
+		t.Fatal("server must not see the plaintext")
+	}
+	if ttl := rdb.TTL(context.Background(), storeKey(id)).Val(); ttl > 24*time.Hour || ttl < 23*time.Hour {
+		t.Fatalf("ttl %v", ttl)
+	}
+
+	t.Setenv("ONETIME_SECRET", "wrong")
+	out.Reset()
+	errb.Reset()
+	if rc := runClient([]string{"read", link}, nil, &out, &errb); rc == 0 || !strings.Contains(errb.String(), "secret") {
+		t.Fatalf("wrong secret must fail: rc=%d %s", rc, errb.String())
+	}
+	t.Setenv("ONETIME_SECRET", "extra key")
+	out.Reset()
+	if rc := runClient([]string{"read", link}, nil, &out, &errb); rc != 0 || out.String() != "секрет из скрипта" {
+		t.Fatalf("read rc=%d out=%q err=%s", rc, out.String(), errb.String())
+	}
+	errb.Reset()
+	if rc := runClient([]string{"read", link}, nil, &out, &errb); rc == 0 || !strings.Contains(errb.String(), "destroyed") {
+		t.Fatalf("second read must fail: %s", errb.String())
+	}
+}
+
 func TestRejectsNonJSONAndOversize(t *testing.T) {
 	srv, _ := newTestServer(t)
-	resp, err := http.Post(srv.URL+"/api/unsecSave", "text/plain", strings.NewReader(`{"secretMessage":"x"}`))
+	resp, err := http.Post(srv.URL+"/api/saveSecret", "text/plain", strings.NewReader(`{"secretMessage":"x"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +245,7 @@ func TestRejectsNonJSONAndOversize(t *testing.T) {
 	}
 
 	big := `{"secretMessage":"` + strings.Repeat("a", maxBodyBytes+10) + `"}`
-	resp, err = http.Post(srv.URL+"/api/unsecSave", "application/json", strings.NewReader(big))
+	resp, err = http.Post(srv.URL+"/api/saveSecret", "application/json", strings.NewReader(big))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,25 +285,6 @@ func TestTTL(t *testing.T) {
 	}
 	if ttlFromSeconds(86400) != 24*time.Hour {
 		t.Fatal("1 day")
-	}
-}
-
-func TestRandomString(t *testing.T) {
-	seen := map[string]bool{}
-	for range 1000 {
-		s, err := randomString(randKeyLen)
-		if err != nil || len(s) != randKeyLen {
-			t.Fatalf("%q %v", s, err)
-		}
-		for _, c := range s {
-			if !strings.ContainsRune(keyAlphabet, c) {
-				t.Fatalf("char %q outside alphabet", c)
-			}
-		}
-		if seen[s] {
-			t.Fatal("duplicate key")
-		}
-		seen[s] = true
 	}
 }
 

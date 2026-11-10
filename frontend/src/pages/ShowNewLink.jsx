@@ -9,10 +9,7 @@ export default function ShowNewLink() {
   const { state } = useLocation();
   const [copied, setCopied] = useState(false);
 
-  const newLink =
-    state && state.randomString && state.newId
-      ? `${window.location.origin}/v/#${state.randomString}${state.newId}`
-      : "";
+  const newLink = state && state.fragment ? `${window.location.origin}/v/#${state.fragment}` : "";
 
   async function copy() {
     if (!newLink) return;

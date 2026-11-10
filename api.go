@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/Luzifer/go-openssl/v4"
+	"1time/internal/otcrypto"
 )
 
 const (
@@ -22,21 +22,40 @@ var (
 	reHashedKey = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	// Old links carry a short hex counter, new ones a 32-char hex id.
 	reMessageID = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+	// Ids chosen by the client (format v3): 128 bits in hex.
+	reClientID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
 // API serves the JSON endpoints under /api/.
 type API struct {
 	store Store
 	log   *slog.Logger
+	// enableUnsecSave turns on /api/unsecSave. Off by default: with it the
+	// server receives the plaintext, which the web flow never does.
+	enableUnsecSave bool
 }
 
-func NewAPI(s Store) *API { return &API{store: s, log: slog.Default()} }
+// APIOption configures optional API behaviour.
+type APIOption func(*API)
+
+// WithUnsecSave enables the server-side encryption endpoint.
+func WithUnsecSave(on bool) APIOption { return func(a *API) { a.enableUnsecSave = on } }
+
+func NewAPI(s Store, opts ...APIOption) *API {
+	a := &API{store: s, log: slog.Default()}
+	for _, o := range opts {
+		o(a)
+	}
+	return a
+}
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/saveSecret", a.saveSecret)
 	mux.HandleFunc("POST /api/get", a.get)
-	mux.HandleFunc("POST /api/unsecSave", a.unsecSave)
+	if a.enableUnsecSave {
+		mux.HandleFunc("POST /api/unsecSave", a.unsecSave)
+	}
 	mux.HandleFunc("GET /api/health", a.health)
 	// Unknown paths get 404 and wrong methods 405 from ServeMux itself.
 	return securityHeaders(mux)
@@ -89,6 +108,9 @@ type saveSecretRequest struct {
 	SecretMessage string `json:"secretMessage"`
 	HashedKey     string `json:"hashedKey"`
 	Duration      int    `json:"duration"`
+	// ID is set by v3 clients, which derive it from the link key so that the
+	// link carries only the key. Empty: the server picks a random id (v2).
+	ID string `json:"id,omitempty"`
 }
 
 type saveSecretResponse struct {
@@ -107,11 +129,27 @@ func (a *API) saveSecret(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, saveSecretResponse{Status: "error", NewID: "0"})
 		return
 	}
-	id, err := a.store.Save(r.Context(), StoredMessage{
-		Encrypted: true,
-		Message:   req.SecretMessage,
-		HashedKey: req.HashedKey,
-	}, ttlFromSeconds(req.Duration))
+	msg := StoredMessage{Encrypted: true, Message: req.SecretMessage, HashedKey: req.HashedKey}
+	ttl := ttlFromSeconds(req.Duration)
+	var (
+		id  = req.ID
+		err error
+	)
+	if id != "" {
+		if !reClientID.MatchString(id) {
+			writeJSON(w, http.StatusBadRequest, saveSecretResponse{Status: "error", NewID: "0"})
+			return
+		}
+		var ok bool
+		ok, err = a.store.SaveWithID(r.Context(), id, msg, ttl)
+		if err == nil && !ok {
+			// Only possible with a reused link key: the client makes a new one.
+			writeJSON(w, http.StatusConflict, saveSecretResponse{Status: "id taken", NewID: "0"})
+			return
+		}
+	} else {
+		id, err = a.store.Save(r.Context(), msg, ttl)
+	}
 	if err != nil {
 		a.log.Error("save message", "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, saveSecretResponse{Status: "error", NewID: "0"})
@@ -171,7 +209,10 @@ type unsecSaveResponse struct {
 }
 
 // unsecSave encrypts a plain text message on the server (for scripts and
-// curl). The server sees the plaintext here, unlike in the web flow.
+// curl). The server sees the plaintext here, unlike in the web flow, so the
+// endpoint is disabled unless ENABLE_UNSEC_SAVE=1. Scripts should prefer
+// "1time send", which encrypts on the client. The result uses the same v2
+// format as the browser.
 func (a *API) unsecSave(w http.ResponseWriter, r *http.Request) {
 	var req unsecSaveRequest
 	if code, err := decodeJSON(w, r, &req); err != nil {
@@ -182,29 +223,38 @@ func (a *API) unsecSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, unsecSaveResponse{Status: "error"})
 		return
 	}
-	randKey, err := randomString(randKeyLen)
+	linkKey, err := otcrypto.NewLinkKey()
 	if err != nil {
 		a.log.Error("random key", "err", err)
 		writeJSON(w, http.StatusInternalServerError, unsecSaveResponse{Status: "error"})
 		return
 	}
-	enc, err := encryptCryptoJSCompatible(randKey, []byte(req.SecretMessage))
+	keys, err := otcrypto.Derive(linkKey, "")
+	if err != nil {
+		a.log.Error("derive", "err", err)
+		writeJSON(w, http.StatusInternalServerError, unsecSaveResponse{Status: "error"})
+		return
+	}
+	payload, err := otcrypto.Encrypt(keys, []byte(req.SecretMessage))
 	if err != nil {
 		a.log.Error("encrypt", "err", err)
 		writeJSON(w, http.StatusInternalServerError, unsecSaveResponse{Status: "error"})
 		return
 	}
-	id, err := a.store.Save(r.Context(), StoredMessage{
+	ok, err := a.store.SaveWithID(r.Context(), keys.ID, StoredMessage{
 		Encrypted: true,
-		Message:   string(enc),
-		HashedKey: sha256Hex(randKey),
+		Message:   payload,
+		HashedKey: keys.Token,
 	}, ttlFromSeconds(req.Duration))
+	if err == nil && !ok {
+		err = errors.New("id collision")
+	}
 	if err != nil {
 		a.log.Error("save message", "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, unsecSaveResponse{Status: "error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, unsecSaveResponse{Status: "ok", NewLink: "/v/#" + randKey + id})
+	writeJSON(w, http.StatusOK, unsecSaveResponse{Status: "ok", NewLink: "/v/#" + otcrypto.Fragment(linkKey, keys.ID)})
 }
 
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
@@ -213,11 +263,4 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// encryptCryptoJSCompatible produces the OpenSSL "Salted__" AES-256-CBC
-// format with the MD5 EVP_BytesToKey KDF, which CryptoJS.AES.decrypt in
-// the browser reads with a passphrase.
-func encryptCryptoJSCompatible(passphrase string, plain []byte) ([]byte, error) {
-	return openssl.New().EncryptBytes(passphrase, plain, openssl.BytesToKeyMD5)
 }

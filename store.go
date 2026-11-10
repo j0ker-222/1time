@@ -32,6 +32,10 @@ const (
 type Store interface {
 	// Save stores the message under a new random id and returns the id.
 	Save(ctx context.Context, msg StoredMessage, ttl time.Duration) (string, error)
+	// SaveWithID stores the message under an id chosen by the client
+	// (format v3 derives it from the link key). It returns false and leaves
+	// the existing message untouched when the id is already taken.
+	SaveWithID(ctx context.Context, id string, msg StoredMessage, ttl time.Duration) (bool, error)
 	// Take returns the message and deletes it in one atomic step, but only
 	// when hashedKey matches. A wrong key leaves the message in place.
 	Take(ctx context.Context, id, hashedKey string) (FetchResult, string, error)
@@ -85,6 +89,14 @@ func (s *RedisStore) Save(ctx context.Context, msg StoredMessage, ttl time.Durat
 		}
 	}
 	return "", errors.New("could not allocate a unique message id")
+}
+
+func (s *RedisStore) SaveWithID(ctx context.Context, id string, msg StoredMessage, ttl time.Duration) (bool, error) {
+	value, err := json.Marshal(msg)
+	if err != nil {
+		return false, err
+	}
+	return s.rdb.SetNX(ctx, storeKey(id), value, ttl).Result()
 }
 
 func (s *RedisStore) Take(ctx context.Context, id, hashedKey string) (FetchResult, string, error) {

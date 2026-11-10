@@ -2,10 +2,14 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Alert, Button, Form } from "react-bootstrap";
 
-import { RANDOM_KEY_LEN, encryptMessage, generatePassword, hashKey, randomString } from "../lib/crypto.js";
+import { generatePassword } from "../lib/crypto.js";
+import { deriveKeys, encrypt, fragment, newLinkKey } from "../lib/cryptoV2.js";
 import { saveSecret } from "../lib/api.js";
 
 const DEFAULT_DAYS = 7;
+
+const isMac = () => /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || globalThis.navigator?.userAgent || "");
+const shortcutLabel = () => (isMac() ? "⌘ + Enter" : "Ctrl + Enter");
 
 export default function NewMessage() {
   const navigate = useNavigate();
@@ -23,14 +27,19 @@ export default function NewMessage() {
     setIsLoading(true);
     setError("");
     try {
-      const randomKey = randomString(RANDOM_KEY_LEN);
-      const passphrase = secretKey + randomKey;
-      const encrypted = encryptMessage(secretMessage, passphrase);
       const days = parseInt(duration, 10) || DEFAULT_DAYS;
-      const res = await saveSecret(encrypted, hashKey(passphrase), days * 86400);
-      if (res.status === "ok") {
-        navigate("/new", { state: { randomString: randomKey, newId: res.newId } });
-        return;
+      // "id taken" means a link key collision, practically impossible with
+      // 128 random bits; a fresh key is simply tried again.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const linkKey = newLinkKey();
+        const keys = await deriveKeys(linkKey, secretKey);
+        const payload = await encrypt(keys, secretMessage);
+        const res = await saveSecret(payload, keys.token, days * 86400, keys.id);
+        if (res.status === "ok") {
+          navigate("/new", { state: { fragment: fragment(linkKey, keys.id) } });
+          return;
+        }
+        if (res.status !== "id taken") break;
       }
       setError("Could not save the message. Please try again.");
     } catch {
@@ -39,9 +48,18 @@ export default function NewMessage() {
     setIsLoading(false);
   }
 
+  const canSubmit = secretMessage.length > 0 && !isLoading;
+
+  // Cmd+Enter (macOS) or Ctrl+Enter (Windows, Linux) sends the form from any field.
+  function handleKeyDown(event) {
+    if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey) || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    if (canSubmit) event.currentTarget.requestSubmit();
+  }
+
   return (
     <div className="Left">
-      <Form onSubmit={handleSubmit}>
+      <Form onSubmit={handleSubmit} onKeyDown={handleKeyDown}>
         <Form.Group controlId="secretMessage" className="mb-3">
           <Form.Label>One-time Message</Form.Label>
           <Form.Control
@@ -85,7 +103,14 @@ export default function NewMessage() {
           <Button variant="outline-secondary" onClick={() => setNeedOptions(!needOptions)}>
             Options
           </Button>
-          <Button variant="success" size="lg" type="submit" disabled={secretMessage.length === 0 || isLoading}>
+          <Button
+            variant="success"
+            size="lg"
+            type="submit"
+            disabled={!canSubmit}
+            title={`${shortcutLabel()} to send`}
+            aria-keyshortcuts="Meta+Enter Control+Enter"
+          >
             {isLoading ? "Loading..." : "Get a link"}
           </Button>
         </div>

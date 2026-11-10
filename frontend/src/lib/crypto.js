@@ -1,22 +1,16 @@
-// Client-side encryption for one-time messages.
+// Link parsing and helpers shared by the pages.
 //
-// The wire format is unchanged from the original 1time: AES-256-CBC in the
-// OpenSSL "Salted__" format produced by CryptoJS.AES.encrypt(text, passphrase),
-// and SHA-256 of the passphrase as the access token. Keeping it means links
-// created before the upgrade still open, and /api/unsecSave (Go) stays
-// compatible. What changed: all randomness now comes from
-// crypto.getRandomValues (crypto-js 4.x also uses it for the salt).
-import AES from "crypto-js/aes";
-import SHA256 from "crypto-js/sha256";
-import Utf8 from "crypto-js/enc-utf8";
+// New messages use format v3 (./cryptoV2.js: AES-256-GCM, HKDF, PBKDF2),
+// v2 links are still read.
+// Links of the old format are still opened through ./legacy.js.
+import { parseFragment } from "./cryptoV2.js";
 
-export const RANDOM_KEY_LEN = 12;
+export const LEGACY_KEY_LEN = 12;
 
-const KEY_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz123456789-_=+.,%:";
 
 // Uniform random string over `alphabet` using rejection sampling.
-export function randomString(length, alphabet = KEY_ALPHABET) {
+export function randomString(length, alphabet) {
   const limit = 256 - (256 % alphabet.length);
   let out = "";
   while (out.length < length) {
@@ -35,29 +29,22 @@ export function generatePassword() {
   return randomString(16, PASSWORD_ALPHABET);
 }
 
-export function encryptMessage(message, passphrase) {
-  return AES.encrypt(message, passphrase).toString();
-}
-
-export function decryptMessage(ciphertext, passphrase) {
-  return AES.decrypt(ciphertext, passphrase).toString(Utf8);
-}
-
-export function hashKey(passphrase) {
-  return SHA256(passphrase).toString();
-}
-
-// Link fragment = 12-char random key + message id. Both the current
-// "/v/#<fragment>" and the old "/v/<fragment>" forms are accepted.
+// Accepts "/v/#<22 chars>" (v3), "/v/#v2.<key>.<id>" (v2), "/v/#<12 chars><id>"
+// and "/v/<12 chars><id>" (first version). Returns null for anything else.
+// A first-version fragment is never 22 characters long: its id is either a
+// short counter or 32 hex characters.
 export function parseLink(href) {
-  let fragment = "";
+  let frag = "";
   const hashPos = href.indexOf("#");
   if (hashPos >= 0) {
-    fragment = href.slice(hashPos + 1);
+    frag = href.slice(hashPos + 1);
   } else {
     const m = href.match(/\/v\/([^/?#]+)/);
-    if (m) fragment = m[1];
+    if (m) frag = m[1];
   }
-  if (fragment.length <= RANDOM_KEY_LEN) return null;
-  return { randomKey: fragment.slice(0, RANDOM_KEY_LEN), id: fragment.slice(RANDOM_KEY_LEN) };
+  const v = parseFragment(frag);
+  if (v) return v;
+  if (frag.startsWith("v2.")) return null;
+  if (frag.length <= LEGACY_KEY_LEN || !/^[A-Za-z0-9]+$/.test(frag)) return null;
+  return { version: 1, randomKey: frag.slice(0, LEGACY_KEY_LEN), id: frag.slice(LEGACY_KEY_LEN) };
 }
