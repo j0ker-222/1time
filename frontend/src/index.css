@@ -55,3 +55,17 @@ div.Center { text-align: center; }
   color: #6c757d;
   opacity: 0.45;
 }
+
+/* Зелёные кнопки (Get a link, Read the message, Copy) как на transmit.j0ker.site:
+   Bootstrap 3 btn-success */
+.btn-success {
+  --bs-btn-bg: #5cb85c;
+  --bs-btn-border-color: #4cae4c;
+  --bs-btn-hover-bg: #449d44;
+  --bs-btn-hover-border-color: #398439;
+  --bs-btn-active-bg: #449d44;
+  --bs-btn-active-border-color: #398439;
+  --bs-btn-disabled-bg: #5cb85c;
+  --bs-btn-disabled-border-color: #4cae4c;
+  --bs-btn-focus-shadow-rgb: 92, 184, 92;
+}
