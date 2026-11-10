@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Alert, Button, Form } from "react-bootstrap";
 
-import { RANDOM_KEY_LEN, encryptMessage, generatePassword, hashKey, randomString } from "../lib/crypto.js";
+import { generatePassword } from "../lib/crypto.js";
+import { deriveKeys, encrypt, fragment, newLinkKey } from "../lib/cryptoV2.js";
 import { saveSecret } from "../lib/api.js";
 
 const DEFAULT_DAYS = 7;
@@ -23,13 +24,13 @@ export default function NewMessage() {
     setIsLoading(true);
     setError("");
     try {
-      const randomKey = randomString(RANDOM_KEY_LEN);
-      const passphrase = secretKey + randomKey;
-      const encrypted = encryptMessage(secretMessage, passphrase);
+      const linkKey = newLinkKey();
+      const keys = await deriveKeys(linkKey, secretKey);
+      const payload = await encrypt(keys, secretMessage);
       const days = parseInt(duration, 10) || DEFAULT_DAYS;
-      const res = await saveSecret(encrypted, hashKey(passphrase), days * 86400);
+      const res = await saveSecret(payload, keys.token, days * 86400);
       if (res.status === "ok") {
-        navigate("/new", { state: { randomString: randomKey, newId: res.newId } });
+        navigate("/new", { state: { fragment: fragment(linkKey, res.newId) } });
         return;
       }
       setError("Could not save the message. Please try again.");

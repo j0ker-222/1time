@@ -24,6 +24,7 @@ type Config struct {
 	RedisAddr     string
 	RedisPassword string
 	RedisDB       int
+	UnsecSave     bool
 }
 
 func getenv(key, def string) string {
@@ -43,6 +44,7 @@ func loadConfig() (Config, error) {
 		RedisAddr:     getenv("REDISHOST", "127.0.0.1:6379"),
 		RedisPassword: os.Getenv("REDISPASS"),
 		RedisDB:       db,
+		UnsecSave:     getenv("ENABLE_UNSEC_SAVE", "0") == "1",
 	}, nil
 }
 
@@ -59,6 +61,10 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		os.Exit(runClient(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
@@ -90,7 +96,7 @@ func main() {
 	}
 	cancel()
 
-	srv := newHTTPServer(cfg.ListenAddr, NewAPI(NewRedisStore(rdb)).Handler())
+	srv := newHTTPServer(cfg.ListenAddr, NewAPI(NewRedisStore(rdb), WithUnsecSave(cfg.UnsecSave)).Handler())
 
 	go func() {
 		logger.Info("listening", "addr", cfg.ListenAddr)

@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Alert, Button, Card, Form } from "react-bootstrap";
 
-import { decryptMessage, hashKey, parseLink } from "../lib/crypto.js";
+import { parseLink } from "../lib/crypto.js";
+import { decrypt, deriveKeys } from "../lib/cryptoV2.js";
 import { getSecret } from "../lib/api.js";
 import { copyText } from "../lib/clipboard.js";
 
@@ -29,11 +30,28 @@ export default function ViewSecretMessage() {
       setIsNoMessage(true);
       return;
     }
-    const passphrase = secretKey + link.randomKey;
     try {
-      const res = await getSecret(link.id, hashKey(passphrase));
+      let token;
+      let open;
+      if (link.version === 2) {
+        const keys = await deriveKeys(link.linkKey, secretKey);
+        token = keys.token;
+        open = (payload) => decrypt(keys, payload);
+      } else {
+        // Link created by the previous version: old crypto, loaded on demand.
+        const legacy = await import("../lib/legacy.js");
+        const passphrase = secretKey + link.randomKey;
+        token = legacy.legacyHashKey(passphrase);
+        open = async (payload) => legacy.legacyDecrypt(payload, passphrase);
+      }
+      const res = await getSecret(link.id, token);
       if (res.status === "ok" && res.cryptedMessage) {
-        setSecretMessage(decryptMessage(res.cryptedMessage, passphrase));
+        try {
+          setSecretMessage(await open(res.cryptedMessage));
+        } catch {
+          setError("The message was modified or damaged and cannot be decrypted. It has been destroyed.");
+          setIsNoMessage(true);
+        }
         // Drop the key from the address bar and history once it is used.
         window.history.replaceState(null, "", "/v/");
       } else if (res.status === "wrong key") {
@@ -111,6 +129,7 @@ export default function ViewSecretMessage() {
 
       {(hasMessage || isNoMessage) && (
         <div className="Center">
+          {isNoMessage && error && <Alert variant="danger">{error}</Alert>}
           <p className="small">{hasMessage ? "Message was destroyed." : "Message was destroyed or never existed."}</p>
           <Button size="lg" variant="primary" onClick={() => navigate("/")}>
             Create New

@@ -3,12 +3,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 
 import App from "./App.jsx";
+import { legacyEncrypt, legacyHashKey } from "./lib/legacy.js";
 
 // In-memory stand-in for the Go API with the same one-time semantics.
 function fakeBackend() {
   const db = new Map();
   let n = 0;
-  return vi.fn(async (url, init) => {
+  const fn = vi.fn(async (url, init) => {
     const body = JSON.parse(init.body);
     let data;
     if (url.endsWith("/saveSecret")) {
@@ -26,12 +27,16 @@ function fakeBackend() {
     }
     return { ok: true, status: 200, json: async () => data };
   });
+  fn.db = db;
+  return fn;
 }
 
 let originalHref;
+let backend;
 beforeEach(() => {
   originalHref = window.location.href;
-  globalThis.fetch = fakeBackend();
+  backend = fakeBackend();
+  globalThis.fetch = backend;
 });
 afterEach(() => {
   cleanup();
@@ -69,7 +74,7 @@ function openLink(link) {
 describe("one-time message flow", () => {
   it("creates a link, reads it once, then reports it destroyed", async () => {
     const link = await createLink("hello secret");
-    expect(link).toMatch(/\/v\/#[A-Za-z0-9]{12}[0-9a-f]{32}$/);
+    expect(link).toMatch(/\/v\/#v2\.[A-Za-z0-9_-]{43}\.[0-9a-f]{32}$/);
 
     openLink(link);
     fireEvent.click(screen.getByText("Read the message"));
@@ -90,4 +95,31 @@ describe("one-time message flow", () => {
     fireEvent.click(screen.getByText("Read the message"));
     await waitFor(() => expect(screen.getByText("guarded")).toBeTruthy());
   });
+
+  it("stores only ciphertext on the server", async () => {
+    await createLink("plain words here");
+    const [rec] = [...backend.db.values()];
+    expect(rec.message.startsWith("v2:")).toBe(true);
+    expect(rec.message).not.toContain("plain words");
+    expect(rec.hashedKey).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("reports a modified message instead of showing garbage", async () => {
+    const link = await createLink("original");
+    const [rec] = [...backend.db.values()];
+    rec.message = rec.message.slice(0, -4) + (rec.message.endsWith("AAAA") ? "BBBB" : "AAAA");
+    openLink(link);
+    fireEvent.click(screen.getByText("Read the message"));
+    expect(await screen.findByText(/modified or damaged/)).toBeTruthy();
+  });
+
+  it("still opens links created by the old version", async () => {
+    // Old record: CryptoJS AES with passphrase = secret + 12-char key.
+    const passphrase = "abcdefghijkl";
+    backend.db.set("1f", { message: legacyEncrypt("старая ссылка", passphrase), hashedKey: legacyHashKey(passphrase) });
+    openLink("http://localhost/v/#abcdefghijkl1f");
+    fireEvent.click(screen.getByText("Read the message"));
+    expect(await screen.findByText("старая ссылка")).toBeTruthy();
+  });
 });
+
