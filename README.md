@@ -55,6 +55,21 @@ Actions (вкладка Actions, артефакты последнего зап�
 Для разработки: `redis-server`, затем `go run .` и `cd frontend && npm run dev`
 (Vite проксирует `/api` на `:8080`).
 
+## Раскатка на сервер одной командой
+
+```shell
+cd ~ && rm -rf 1time-build
+git clone -b crypto-v2 --depth 1 https://github.com/j0ker-222/1time.git 1time-build
+sudo bash 1time-build/deploy/rollout.sh
+```
+
+`deploy/rollout.sh` при нехватке памяти (меньше 2 ГБ RAM+swap) временно
+подключает swap 2 ГБ, запускает `deploy/onetime-upgrade.sh` со сборкой в
+один поток и веткой, на которой стоит копия, и после работы убирает swap.
+Ключи: `-y` без подтверждения, `-k` оставить swap, `-j` почистить journald,
+`-R <бэкап>` откат. Что делает `onetime-upgrade.sh` (бэкап, сборка от nobody,
+отдельный Redis, проверки, автоматический откат), описано в его заголовке.
+
 ## Установка (Debian)
 
 ```shell
