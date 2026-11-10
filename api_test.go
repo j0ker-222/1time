@@ -132,6 +132,33 @@ func TestLegacyMessageStillReadable(t *testing.T) {
 	}
 }
 
+func TestSaveWithClientID(t *testing.T) {
+	srv, _ := newTestServer(t)
+	lk, _ := otcrypto.NewLinkKey()
+	keys, _ := otcrypto.Derive(lk, "")
+	body := map[string]any{"secretMessage": "v3:x", "hashedKey": keys.Token, "id": keys.ID}
+	code, res := post(t, srv.URL+"/api/saveSecret", body)
+	if code != 200 || res["status"] != "ok" || res["newId"] != keys.ID {
+		t.Fatalf("save: %d %v", code, res)
+	}
+	// The same id again must not overwrite the stored message.
+	body["secretMessage"] = "v3:other"
+	code, res = post(t, srv.URL+"/api/saveSecret", body)
+	if code != http.StatusConflict || res["status"] != "id taken" {
+		t.Fatalf("duplicate id: %d %v", code, res)
+	}
+	_, res = post(t, srv.URL+"/api/get", map[string]any{"id": keys.ID, "hashedKey": keys.Token})
+	if res["status"] != "ok" || res["cryptedMessage"] != "v3:x" {
+		t.Fatalf("get: %v", res)
+	}
+	for _, bad := range []string{"1a", strings.Repeat("A", 32), strings.Repeat("a", 64), "../../etc"} {
+		code, _ := post(t, srv.URL+"/api/saveSecret", map[string]any{"secretMessage": "x", "hashedKey": keys.Token, "id": bad})
+		if code != http.StatusBadRequest {
+			t.Fatalf("id %q: got %d", bad, code)
+		}
+	}
+}
+
 func TestUnsecSaveDisabledByDefault(t *testing.T) {
 	srv, _ := newTestServer(t)
 	code, _ := post(t, srv.URL+"/api/unsecSave", map[string]any{"secretMessage": "x"})
@@ -140,22 +167,23 @@ func TestUnsecSaveDisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestUnsecSaveV2RoundTrip(t *testing.T) {
+func TestUnsecSaveV3RoundTrip(t *testing.T) {
 	srv, rdb := newTestServer(t, WithUnsecSave(true))
 	_, res := post(t, srv.URL+"/api/unsecSave", map[string]any{"secretMessage": "Привет из API"})
 	if res["status"] != "ok" {
 		t.Fatalf("unsecSave: %v", res)
 	}
 	link := res["newLink"].(string)
-	lk, id, err := otcrypto.ParseFragment(link)
-	if err != nil || !strings.HasPrefix(link, "/v/#v2.") {
+	lk, _, err := otcrypto.ParseFragment(link)
+	if err != nil || len(link) != len("/v/#")+otcrypto.FragmentLen {
 		t.Fatalf("link %q: %v", link, err)
 	}
-	stored, _ := rdb.Get(context.Background(), storeKey(id)).Result()
-	if strings.Contains(stored, "Привет") || !strings.Contains(stored, `"v2:`) {
-		t.Fatalf("stored value must be a v2 ciphertext: %s", stored)
-	}
 	keys, _ := otcrypto.Derive(lk, "")
+	id := keys.ID
+	stored, _ := rdb.Get(context.Background(), storeKey(id)).Result()
+	if strings.Contains(stored, "Привет") || !strings.Contains(stored, `"v3:`) {
+		t.Fatalf("stored value must be a v3 ciphertext: %s", stored)
+	}
 	_, got := post(t, srv.URL+"/api/get", map[string]any{"id": id, "hashedKey": keys.Token})
 	if got["status"] != "ok" {
 		t.Fatalf("get: %v", got)
@@ -174,10 +202,12 @@ func TestClientSendRead(t *testing.T) {
 		t.Fatalf("send rc=%d %s", rc, errb.String())
 	}
 	link := strings.TrimSpace(out.String())
-	if !strings.HasPrefix(link, srv.URL+"/v/#v2.") {
+	if len(link) != len(srv.URL+"/v/#")+otcrypto.FragmentLen {
 		t.Fatalf("link %q", link)
 	}
-	_, id, _ := otcrypto.ParseFragment(link)
+	lk, _, _ := otcrypto.ParseFragment(link)
+	k, _ := otcrypto.Derive(lk, "")
+	id := k.ID
 	stored, _ := rdb.Get(context.Background(), storeKey(id)).Result()
 	if strings.Contains(stored, "секрет") {
 		t.Fatal("server must not see the plaintext")

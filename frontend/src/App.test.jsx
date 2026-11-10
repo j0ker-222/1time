@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import App from "./App.jsx";
 import { legacyEncrypt, legacyHashKey } from "./lib/legacy.js";
+import { deriveKeys, encrypt, fragment } from "./lib/cryptoV2.js";
 
 // In-memory stand-in for the Go API with the same one-time semantics.
 function fakeBackend() {
@@ -13,9 +14,13 @@ function fakeBackend() {
     const body = JSON.parse(init.body);
     let data;
     if (url.endsWith("/saveSecret")) {
-      const id = (++n).toString(16).padStart(32, "0");
-      db.set(id, { message: body.secretMessage, hashedKey: body.hashedKey });
-      data = { status: "ok", newId: id };
+      const id = body.id || (++n).toString(16).padStart(32, "0");
+      if (db.has(id)) {
+        data = { status: "id taken", newId: "0" };
+      } else {
+        db.set(id, { message: body.secretMessage, hashedKey: body.hashedKey });
+        data = { status: "ok", newId: id };
+      }
     } else if (url.endsWith("/get")) {
       const rec = db.get(body.id);
       if (!rec) data = { status: "no message", cryptedMessage: "0" };
@@ -74,7 +79,7 @@ function openLink(link) {
 describe("one-time message flow", () => {
   it("creates a link, reads it once, then reports it destroyed", async () => {
     const link = await createLink("hello secret");
-    expect(link).toMatch(/\/v\/#v2\.[A-Za-z0-9_-]{43}\.[0-9a-f]{32}$/);
+    expect(link).toMatch(/\/v\/#[A-Za-z0-9_-]{22}$/);
 
     openLink(link);
     fireEvent.click(screen.getByText("Read the message"));
@@ -99,7 +104,10 @@ describe("one-time message flow", () => {
   it("stores only ciphertext on the server", async () => {
     await createLink("plain words here");
     const [rec] = [...backend.db.values()];
-    expect(rec.message.startsWith("v2:")).toBe(true);
+    expect(rec.message.startsWith("v3:")).toBe(true);
+    // The id the server got is not in the link.
+    const [id] = [...backend.db.keys()];
+    expect(id).toMatch(/^[0-9a-f]{32}$/);
     expect(rec.message).not.toContain("plain words");
     expect(rec.hashedKey).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -113,6 +121,15 @@ describe("one-time message flow", () => {
     expect(await screen.findByText(/modified or damaged/)).toBeTruthy();
   });
 
+  it("still opens v2 links", async () => {
+    const linkKey = new Uint8Array(32).fill(5);
+    const keys = await deriveKeys(linkKey);
+    backend.db.set("ab".repeat(16), { message: await encrypt(keys, "ссылка v2"), hashedKey: keys.token });
+    openLink("http://localhost/v/#" + fragment(linkKey, "ab".repeat(16)));
+    fireEvent.click(screen.getByText("Read the message"));
+    expect(await screen.findByText("ссылка v2")).toBeTruthy();
+  });
+
   it("still opens links created by the old version", async () => {
     // Old record: CryptoJS AES with passphrase = secret + 12-char key.
     const passphrase = "abcdefghijkl";
@@ -123,3 +140,38 @@ describe("one-time message flow", () => {
   });
 });
 
+
+describe("keyboard shortcut", () => {
+  function renderForm(text) {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <App />
+      </MemoryRouter>
+    );
+    const area = screen.getByLabelText("One-time Message");
+    fireEvent.change(area, { target: { value: text } });
+    return area;
+  }
+
+  it("sends the message with Ctrl+Enter", async () => {
+    const area = renderForm("ctrl enter");
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    expect(await screen.findByDisplayValue(/\/v\/#/)).toBeTruthy();
+    expect(backend.db.size).toBe(1);
+  });
+
+  it("sends the message with Cmd+Enter", async () => {
+    const area = renderForm("cmd enter");
+    fireEvent.keyDown(area, { key: "Enter", metaKey: true });
+    expect(await screen.findByDisplayValue(/\/v\/#/)).toBeTruthy();
+  });
+
+  it("does nothing on plain Enter or with an empty message", async () => {
+    const area = renderForm("");
+    fireEvent.keyDown(area, { key: "Enter", ctrlKey: true });
+    fireEvent.change(area, { target: { value: "x" } });
+    fireEvent.keyDown(area, { key: "Enter" });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(backend).not.toHaveBeenCalled();
+  });
+});

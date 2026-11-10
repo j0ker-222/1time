@@ -22,6 +22,8 @@ var (
 	reHashedKey = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	// Old links carry a short hex counter, new ones a 32-char hex id.
 	reMessageID = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+	// Ids chosen by the client (format v3): 128 bits in hex.
+	reClientID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
 // API serves the JSON endpoints under /api/.
@@ -106,6 +108,9 @@ type saveSecretRequest struct {
 	SecretMessage string `json:"secretMessage"`
 	HashedKey     string `json:"hashedKey"`
 	Duration      int    `json:"duration"`
+	// ID is set by v3 clients, which derive it from the link key so that the
+	// link carries only the key. Empty: the server picks a random id (v2).
+	ID string `json:"id,omitempty"`
 }
 
 type saveSecretResponse struct {
@@ -124,11 +129,27 @@ func (a *API) saveSecret(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, saveSecretResponse{Status: "error", NewID: "0"})
 		return
 	}
-	id, err := a.store.Save(r.Context(), StoredMessage{
-		Encrypted: true,
-		Message:   req.SecretMessage,
-		HashedKey: req.HashedKey,
-	}, ttlFromSeconds(req.Duration))
+	msg := StoredMessage{Encrypted: true, Message: req.SecretMessage, HashedKey: req.HashedKey}
+	ttl := ttlFromSeconds(req.Duration)
+	var (
+		id  = req.ID
+		err error
+	)
+	if id != "" {
+		if !reClientID.MatchString(id) {
+			writeJSON(w, http.StatusBadRequest, saveSecretResponse{Status: "error", NewID: "0"})
+			return
+		}
+		var ok bool
+		ok, err = a.store.SaveWithID(r.Context(), id, msg, ttl)
+		if err == nil && !ok {
+			// Only possible with a reused link key: the client makes a new one.
+			writeJSON(w, http.StatusConflict, saveSecretResponse{Status: "id taken", NewID: "0"})
+			return
+		}
+	} else {
+		id, err = a.store.Save(r.Context(), msg, ttl)
+	}
 	if err != nil {
 		a.log.Error("save message", "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, saveSecretResponse{Status: "error", NewID: "0"})
@@ -220,17 +241,20 @@ func (a *API) unsecSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, unsecSaveResponse{Status: "error"})
 		return
 	}
-	id, err := a.store.Save(r.Context(), StoredMessage{
+	ok, err := a.store.SaveWithID(r.Context(), keys.ID, StoredMessage{
 		Encrypted: true,
 		Message:   payload,
 		HashedKey: keys.Token,
 	}, ttlFromSeconds(req.Duration))
+	if err == nil && !ok {
+		err = errors.New("id collision")
+	}
 	if err != nil {
 		a.log.Error("save message", "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, unsecSaveResponse{Status: "error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, unsecSaveResponse{Status: "ok", NewLink: "/v/#" + otcrypto.Fragment(linkKey, id)})
+	writeJSON(w, http.StatusOK, unsecSaveResponse{Status: "ok", NewLink: "/v/#" + otcrypto.Fragment(linkKey, keys.ID)})
 }
 
 func (a *API) health(w http.ResponseWriter, r *http.Request) {

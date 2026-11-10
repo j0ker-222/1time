@@ -33,9 +33,11 @@ export default function ViewSecretMessage() {
     try {
       let token;
       let open;
-      if (link.version === 2) {
+      let id = link.id;
+      if (link.version >= 2) {
         const keys = await deriveKeys(link.linkKey, secretKey);
         token = keys.token;
+        if (!id) id = keys.id; // v3: the id is derived from the link key
         open = (payload) => decrypt(keys, payload);
       } else {
         // Link created by the previous version: old crypto, loaded on demand.
@@ -44,7 +46,7 @@ export default function ViewSecretMessage() {
         token = legacy.legacyHashKey(passphrase);
         open = async (payload) => legacy.legacyDecrypt(payload, passphrase);
       }
-      const res = await getSecret(link.id, token);
+      const res = await getSecret(id, token);
       if (res.status === "ok" && res.cryptedMessage) {
         try {
           setSecretMessage(await open(res.cryptedMessage));

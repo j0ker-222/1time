@@ -13,27 +13,35 @@ The backend binary is also a client that encrypts locally:
 
 ```shell
 echo 'db password: s3cr3t' | 1time send -days 1
-# https://onetime.j0ker.site/v/#v2.<key>.<id>
+# https://onetime.j0ker.site/v/#<22 chars>
 
-1time read 'https://onetime.j0ker.site/v/#v2.<key>.<id>'
+1time read 'https://onetime.j0ker.site/v/#<22 chars>'
 ```
 
 Options: `-url` (or `ONETIME_URL`), `-days` 1..30. An additional secret key
 is taken from the `ONETIME_SECRET` environment variable (not a flag, so it
 does not appear in `ps`). Build for macOS: `GOOS=darwin go build -o 1time .`
 
-## Format v2
+## Format v3
 
 ```
-linkKey = 32 random bytes; link = <origin>/v/#v2.<base64url(linkKey)>.<id>
+linkKey = 16 random bytes; link = <origin>/v/#<base64url(linkKey)>  (22 chars)
+id      = hex(HKDF-SHA256(linkKey, salt "", info "1time v3 id", 16 bytes))
 IKM     = linkKey                                (no additional secret)
 IKM     = linkKey || PBKDF2-HMAC-SHA256(secret,
-            salt = HKDF-SHA256(linkKey, info "1time v2 pbkdf2 salt", 16 bytes),
+            salt = HKDF-SHA256(linkKey, info "1time v3 pbkdf2 salt", 16 bytes),
             600000 iterations, 32 bytes)         (with additional secret)
-encKey  = HKDF-SHA256(IKM, salt "", info "1time v2 enc", 32 bytes)
-token   = hex(HKDF-SHA256(IKM, salt "", info "1time v2 auth", 32 bytes))
-payload = "v2:" + base64(iv(12 bytes) || AES-256-GCM(encKey, iv, text, AAD "1time v2"))
+encKey  = HKDF-SHA256(IKM, salt "", info "1time v3 enc", 32 bytes)
+token   = hex(HKDF-SHA256(IKM, salt "", info "1time v3 auth", 32 bytes))
+payload = "v3:" + base64(iv(12 bytes) || AES-256-GCM(encKey, iv, text, AAD "1time v3"))
 ```
+
+The client derives the message id from the link key, so the link carries
+only the key. The id does not depend on the additional secret.
+
+Format v2 (links `/v/#v2.<base64url(32-byte key)>.<id>`) is still read: the
+same scheme with a 32-byte key, "v2" in the info strings, AAD and prefix,
+no derived id (the server picks it).
 
 AES-GCM authenticates the ciphertext, so a modified message is rejected
 instead of being decrypted into garbage.
@@ -43,11 +51,14 @@ instead of being decrypted into garbage.
 `POST /api/saveSecret`
 
 ```json
-{ "secretMessage": "v2:...", "hashedKey": "<token, 64 hex>", "duration": 86400 }
+{ "secretMessage": "v3:...", "hashedKey": "<token, 64 hex>", "duration": 86400, "id": "<id, 32 hex>" }
 ```
 
 `duration` is in seconds, default 7 days, maximum 30 days (2592000).
-Response: `{ "status": "ok", "newId": "<32 hex>" }`.
+Response: `{ "status": "ok", "newId": "<id>" }`. If the id is already taken
+(only with a reused link key) the answer is 409 `{ "status": "id taken" }`
+and the stored message is not changed: make a new link key and retry.
+Without `id` the server picks a random one (v2 clients).
 
 ## Read once
 
@@ -57,7 +68,7 @@ Response: `{ "status": "ok", "newId": "<32 hex>" }`.
 { "id": "<id>", "hashedKey": "<token>" }
 ```
 
-Response: `{ "status": "ok", "cryptedMessage": "v2:..." }` and the message
+Response: `{ "status": "ok", "cryptedMessage": "v3:..." }` and the message
 is deleted. Other statuses: `"wrong key"` (message kept, ask for the
 additional secret) and `"no message"`.
 

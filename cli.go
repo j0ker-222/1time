@@ -89,30 +89,40 @@ func clientSend(args []string, stdin io.Reader, stdout io.Writer) error {
 	if len(msg) > maxClientInput {
 		return errors.New("message is larger than 512 KB")
 	}
-	linkKey, err := otcrypto.NewLinkKey()
-	if err != nil {
-		return err
-	}
-	keys, err := otcrypto.Derive(linkKey, os.Getenv("ONETIME_SECRET"))
-	if err != nil {
-		return err
-	}
-	payload, err := otcrypto.Encrypt(keys, msg)
-	if err != nil {
-		return err
-	}
 	base := strings.TrimRight(*server, "/")
-	var res saveSecretResponse
-	if err := postJSON(base+"/api/saveSecret", saveSecretRequest{
-		SecretMessage: payload, HashedKey: keys.Token, Duration: *days * 86400,
-	}, &res); err != nil {
-		return err
+	secret := os.Getenv("ONETIME_SECRET")
+	// "id taken" means a link key collision, practically impossible with
+	// 128 random bits; a fresh key is simply tried again.
+	for range 3 {
+		linkKey, err := otcrypto.NewLinkKey()
+		if err != nil {
+			return err
+		}
+		keys, err := otcrypto.Derive(linkKey, secret)
+		if err != nil {
+			return err
+		}
+		payload, err := otcrypto.Encrypt(keys, msg)
+		if err != nil {
+			return err
+		}
+		var res saveSecretResponse
+		if err := postJSON(base+"/api/saveSecret", saveSecretRequest{
+			SecretMessage: payload, HashedKey: keys.Token, Duration: *days * 86400, ID: keys.ID,
+		}, &res); err != nil {
+			return err
+		}
+		switch res.Status {
+		case "ok":
+			fmt.Fprintf(stdout, "%s/v/#%s\n", base, otcrypto.Fragment(linkKey, keys.ID))
+			return nil
+		case "id taken":
+			continue
+		default:
+			return fmt.Errorf("server: %s", res.Status)
+		}
 	}
-	if res.Status != "ok" {
-		return fmt.Errorf("server: %s", res.Status)
-	}
-	fmt.Fprintf(stdout, "%s/v/#%s\n", base, otcrypto.Fragment(linkKey, res.NewID))
-	return nil
+	return errors.New("could not allocate a message id")
 }
 
 func clientRead(args []string, stdout io.Writer) error {
@@ -122,7 +132,7 @@ func clientRead(args []string, stdout io.Writer) error {
 	link := args[0]
 	linkKey, id, err := otcrypto.ParseFragment(link)
 	if err != nil {
-		return errors.New("not a v2 link (old links open only in the browser)")
+		return errors.New("not a 1time link (links of the first version open only in the browser)")
 	}
 	base := link
 	if i := strings.Index(base, "/v/"); i >= 0 {
@@ -133,6 +143,9 @@ func clientRead(args []string, stdout io.Writer) error {
 	keys, err := otcrypto.Derive(linkKey, os.Getenv("ONETIME_SECRET"))
 	if err != nil {
 		return err
+	}
+	if id == "" { // v3: the id is derived from the link key
+		id = keys.ID
 	}
 	var res getResponse
 	if err := postJSON(base+"/api/get", getRequest{ID: id, HashedKey: keys.Token}, &res); err != nil {

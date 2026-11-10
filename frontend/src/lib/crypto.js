@@ -1,6 +1,7 @@
 // Link parsing and helpers shared by the pages.
 //
-// New messages use format v2 (./cryptoV2.js: AES-256-GCM, HKDF, PBKDF2).
+// New messages use format v3 (./cryptoV2.js: AES-256-GCM, HKDF, PBKDF2),
+// v2 links are still read.
 // Links of the old format are still opened through ./legacy.js.
 import { parseFragment } from "./cryptoV2.js";
 
@@ -28,8 +29,10 @@ export function generatePassword() {
   return randomString(16, PASSWORD_ALPHABET);
 }
 
-// Accepts "/v/#v2.<key>.<id>" (v2), "/v/#<12 chars><id>" and "/v/<12 chars><id>"
-// (old format). Returns null for anything else.
+// Accepts "/v/#<22 chars>" (v3), "/v/#v2.<key>.<id>" (v2), "/v/#<12 chars><id>"
+// and "/v/<12 chars><id>" (first version). Returns null for anything else.
+// A first-version fragment is never 22 characters long: its id is either a
+// short counter or 32 hex characters.
 export function parseLink(href) {
   let frag = "";
   const hashPos = href.indexOf("#");
@@ -39,10 +42,9 @@ export function parseLink(href) {
     const m = href.match(/\/v\/([^/?#]+)/);
     if (m) frag = m[1];
   }
-  if (frag.startsWith("v2.")) {
-    const v2 = parseFragment(frag);
-    return v2 ? { version: 2, ...v2 } : null;
-  }
+  const v = parseFragment(frag);
+  if (v) return v;
+  if (frag.startsWith("v2.")) return null;
   if (frag.length <= LEGACY_KEY_LEN || !/^[A-Za-z0-9]+$/.test(frag)) return null;
   return { version: 1, randomKey: frag.slice(0, LEGACY_KEY_LEN), id: frag.slice(LEGACY_KEY_LEN) };
 }

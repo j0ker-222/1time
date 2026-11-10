@@ -18,7 +18,8 @@ async function post(path, payload) {
   return data;
 }
 
-export const saveSecret = (secretMessage, hashedKey, duration) =>
-  post("saveSecret", { secretMessage, hashedKey, duration });
+// id: set by format v3, which derives it from the link key on the client.
+export const saveSecret = (secretMessage, hashedKey, duration, id) =>
+  post("saveSecret", id ? { secretMessage, hashedKey, duration, id } : { secretMessage, hashedKey, duration });
 
 export const getSecret = (id, hashedKey) => post("get", { id, hashedKey });
