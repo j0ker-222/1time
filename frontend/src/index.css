@@ -49,3 +49,9 @@ div.Center { text-align: center; }
 }
 
 .mt-gap { margin-top: 12px; }
+
+/* Подсказка в полях ввода бледнее, чтобы не выглядела как введённый текст */
+.form-control::placeholder {
+  color: #6c757d;
+  opacity: 0.45;
+}
